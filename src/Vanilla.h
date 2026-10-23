@@ -14,15 +14,6 @@ inline constexpr std::uint32_t SteelArrow=0x0001397F;
 inline constexpr std::uint32_t FalmerArrow=0x00038341;
 inline constexpr std::uint32_t DraugrArrow=0x00034182;
 inline constexpr std::uint32_t ForswornArrow=0x000CEE9E;
-inline constexpr std::array<std::uint32_t,7> archerClasses{{
-    0x00072891, // EncClassThalmorMissile
-    0x0006766C, // EncClassAlikrMissile
-    0x00043BCD, // EncClassForswornMissile
-    0x00015BE7, // EncClassBanditMissile
-    0x00023C0D, // EncClassDraugrMissile
-    0x00013181, // CombatRanger
-    0x0001317D, // CombatScout
-}};
 inline constexpr std::array<std::uint32_t,69> battleClasses{{
     0x00017008, // EncClassDremoraMelee
     0x0010F71E, // EncClassHorse

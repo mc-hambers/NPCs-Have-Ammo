@@ -1,0 +1,10 @@
+{
+  "name": "npcs-have-ammo",
+  "version-string": "1.0.3",
+  "dependencies": [
+    "spdlog",
+    "rapidcsv",
+    "directxtk",
+    "directxmath"
+  ]
+}

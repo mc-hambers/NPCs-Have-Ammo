@@ -1,0 +1,33 @@
+{
+  "plugin_name": "NPCs Have Ammo (arrow/bolt restock mod)",
+  "dll_architecture": "x64",
+  "windows_loader": "passed",
+  "skse_exports": "passed",
+  "version": "1.0.3",
+  "gameplay_tested": false,
+  "installed_runtime": "1.7.104.0",
+  "reset_hook_file_audit": {
+    "Actor": {
+      "address_library_id": 207511,
+      "vtable_rva": "0x191b548",
+      "slot": "0x8A",
+      "reset_target_rva": "0x678950"
+    },
+    "Character": {
+      "address_library_id": 207886,
+      "vtable_rva": "0x1923258",
+      "slot": "0x8A",
+      "reset_target_rva": "0x678950"
+    }
+  },
+  "ammo_setting_name_file_check": "passed",
+  "core_behavior_checks": 60482,
+  "dll_sha256": "fbeb8e23cd9a82d417a491cd98ea67cb51ac2ded191939b92f655d7a33dd13c8",
+  "spid_required": false,
+  "esp_required": false,
+  "save_schema": 2,
+  "arrow_and_bolt_restock": true,
+  "follower_interval_multiplier": 2,
+  "current_ammo_priority": true,
+  "actual_weapon_required": true
+}

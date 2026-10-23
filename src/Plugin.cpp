@@ -158,18 +158,10 @@ public:
         if (!active.load() || session.load()!=generation || resets.contains(id)) return;
         std::array<bool,2> weapons{};std::vector<RE::TESForm*> listForms;std::set<std::uint32_t> path;int nodes=0;
         auto* base=actor->GetActorBase();
+        for (const auto& [item,data]:inventory) if (data.first>0) for (int k=0;k<2;++k) weapons[k]=weapons[k] || rangedWeapon(item ? item->As<RE::TESObjectWEAP>() : nullptr,static_cast<Kind>(k));
+        if (!weapons[0] && !weapons[1]) return;
         base->ForEachContainerObject([&](RE::ContainerObject& entry) {if (entry.count>0) collect(entry.obj,actor->GetLevel(),listForms,path,0,nodes);return RE::BSContainer::ForEachResult::kContinue;});
         if (base->defaultOutfit) base->defaultOutfit->ForEachItem([&](RE::TESForm* form) {collect(form,actor->GetLevel(),listForms,path,0,nodes);return RE::BSContainer::ForEachResult::kContinue;});
-        for (const auto& [item,data]:inventory) if (data.first>0) for (int k=0;k<2;++k) weapons[k]=weapons[k] || rangedWeapon(item ? item->As<RE::TESObjectWEAP>() : nullptr,static_cast<Kind>(k));
-        const auto classID=base->npcClass ? base->npcClass->GetFormID() : 0;
-        const bool hunter=std::any_of(hunters.begin(),hunters.end(),[&](auto* f) {return f && actor->IsInFaction(f);});
-        // Hunters/archer classes may receive arrows even after losing their bow.
-        if (!weapons[0] && !weapons[1] && (hunter || includes(Vanilla::archerClasses,classID))) {
-            bool listedBow=false,listedCrossbow=false;
-            for (auto* form:listForms) {listedBow=listedBow || rangedWeapon(form->As<RE::TESObjectWEAP>(),Kind::Arrow);listedCrossbow=listedCrossbow || rangedWeapon(form->As<RE::TESObjectWEAP>(),Kind::Bolt);}
-            weapons[listedCrossbow && !listedBow ? 1 : 0]=true;
-        }
-        if (!weapons[0] && !weapons[1]) return;
         auto* state=stateFor(actor);if (!state) return;
         std::vector<std::uint32_t> protectedForms;for (const auto& [form,count]:state->gifts) protectedForms.push_back(form);
         for (auto form:protectedForms) {int held=0;for (const auto& [item,data]:inventory) if (item && item->GetFormID()==form) held=std::max(0,data.first);reconcileGift(*state,form,held);}
@@ -184,6 +176,8 @@ public:
             // Snapshot again: callbacks from an earlier arrow addition may have
             // changed bolt quantities, gifts, or weapons.
             flushGifts();auto live=actor->GetInventory();int current=0;
+            const auto kind=static_cast<Kind>(k);
+            if (!std::any_of(live.begin(),live.end(),[&](const auto& entry) {return entry.second.first>0 && rangedWeapon(entry.first ? entry.first->template As<RE::TESObjectWEAP>() : nullptr,kind);})) continue;
             for (const auto& [item,data]:live) if (auto* ammo=item ? item->As<RE::TESAmmo>() : nullptr;ammo && data.first>0 && (ammo->IsBolt() ? 1 : 0)==k) current=static_cast<int>(std::min<std::int64_t>(std::numeric_limits<int>::max(),static_cast<std::int64_t>(current)+data.first));
             if (resets.contains(id) || !active.load() || session.load()!=generation || !validSave || !eligible(actor)) return;
             found=saved.actors.find(id);if (found==saved.actors.end()) return;
@@ -193,11 +187,11 @@ public:
             for (const auto& [item,data]:live) {
                 auto* ammo=item ? item->As<RE::TESAmmo>() : nullptr;if (!ammo || data.first<=0 || (data.second && data.second->IsQuestObject())) continue;
                 const int protectedCount=found->second.gifts.contains(ammo->GetFormID()) ? found->second.gifts.at(ammo->GetFormID()) : 0;
-                if (nativeCount(data.first,protectedCount)>0) if (auto c=candidate(ammo)) choices.push_back(*c);
+                if (const int held=nativeCount(data.first,protectedCount);held>0) if (auto c=candidate(ammo)) {c->priority=actor->GetCurrentAmmo()==ammo ? 2u : 1u;c->held=held;choices.push_back(*c);}
             }
             for (auto* form:listForms) if (auto* ammo=form->As<RE::TESAmmo>()) if (auto c=candidate(ammo)) choices.push_back(*c);
             const int quantity=refillCount(channel,current,initial);
-            const auto kind=static_cast<Kind>(k);auto selected=chooseAmmo(choices,kind,family);
+            auto selected=chooseAmmo(choices,kind,family);
             RE::TESAmmo* selectedAmmo=selected ? RE::TESForm::LookupByID<RE::TESAmmo>(selected->form) : nullptr;
             if (!selectedAmmo) {
                 if (kind==Kind::Bolt) selectedAmmo=usableAmmo(steelBolt) ? steelBolt : dwarvenBolt;
@@ -289,7 +283,7 @@ void message(SKSE::MessagingInterface::Message* message) {
 }
 SKSEPluginLoad(const SKSE::LoadInterface* skse) {
     SKSE::Init(skse);if (const auto path=SKSE::log::log_directory()) {auto sink=std::make_shared<spdlog::sinks::basic_file_sink_mt>((*path/"NPCsHaveAmmo.log").string(),true);spdlog::set_default_logger(std::make_shared<spdlog::logger>("NPCsHaveAmmo",std::move(sink)));spdlog::set_level(spdlog::level::info);spdlog::flush_on(spdlog::level::info);}
-    logger::info("NPCs Have Ammo 1.0.2; runtime {}",REL::Module::get().version().string());
+    logger::info("NPCs Have Ammo 1.0.3; runtime {}",REL::Module::get().version().string());
     const auto v=REL::Module::get().version();const std::set<unsigned> ae{317,318,323,342,353,629,640,659,1130,1170,1179};
     if (!(v.major()==1 && ((v.minor()==5 && v.patch()==97) || (v.minor()==6 && ae.contains(v.patch())) || (v.minor()==7 && (v.patch()==99 || v.patch()==104))))) {logger::error("Unsupported runtime");return false;}
     auto* api=SKSE::GetSerializationInterface();if (!api || !SKSE::GetTaskInterface()) return false;

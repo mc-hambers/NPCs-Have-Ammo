@@ -7,6 +7,7 @@
 #include <optional>
 #include <span>
 #include <unordered_map>
+#include <tuple>
 
 namespace NHA {
 enum class Kind : std::uint8_t { Arrow, Bolt };
@@ -98,6 +99,8 @@ struct Candidate {
     int value;
     float damage;
     Family family;
+    unsigned priority=0; // Native list < carried stock < currently equipped carried stock.
+    int held=0;
 };
 inline bool familyAllowed(Family actor,Family ammo,Kind kind) {
     if (ammo==Family::Custom) return true; // Supplied by this actor's own inventory/list.
@@ -107,8 +110,9 @@ inline bool familyAllowed(Family actor,Family ammo,Kind kind) {
 inline std::optional<Candidate> chooseAmmo(std::span<const Candidate> pool,Kind kind,Family family) {
     std::optional<Candidate> chosen;
     for (const auto& candidate:pool) {
-        if (!candidate.form || candidate.kind!=kind || !std::isfinite(candidate.damage) || candidate.damage<=0 || !familyAllowed(family,candidate.family,kind)) continue;
-        if (!chosen || candidate.value<chosen->value || (candidate.value==chosen->value && (candidate.damage>chosen->damage || (candidate.damage==chosen->damage && candidate.form<chosen->form)))) chosen=candidate;
+        if (!candidate.form || candidate.kind!=kind || !std::isfinite(candidate.damage) || candidate.damage<=0 || (!candidate.priority && !familyAllowed(family,candidate.family,kind))) continue;
+        const auto rank=[](const Candidate& c) {return std::tuple{c.priority,c.held,-static_cast<std::int64_t>(c.value),c.damage,std::numeric_limits<std::uint32_t>::max()-c.form};};
+        if (!chosen || rank(candidate)>rank(*chosen)) chosen=candidate;
     }
     return chosen;
 }
