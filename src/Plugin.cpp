@@ -1,3 +1,5 @@
+#include "ActorWorkQueue.h"
+#include "Eligibility.h"
 #include "Core.h"
 #include "Lifecycle.h"
 #include "Serialization.h"
@@ -36,7 +38,7 @@ public:
         auto* source=RE::ScriptEventSourceHolder::GetSingleton();
         source->AddEventSink<RE::TESObjectLoadedEvent>(this);source->AddEventSink<RE::TESResetEvent>(this);source->AddEventSink<RE::TESFormDeleteEvent>(this);source->AddEventSink<RE::TESContainerChangedEvent>(this);source->AddEventSink<RE::TESActorLocationChangeEvent>(this);
         logger::info("Fallbacks: iron={}, steel={}, Falmer={}, ancient Nord={}, Forsworn={}, steel bolt={}, dwarven bolt={}",iron!=nullptr,steel!=nullptr,falmer!=nullptr,ancient!=nullptr,forsworn!=nullptr,steelBolt!=nullptr,dwarvenBolt!=nullptr);
-        worker=std::jthread([this](std::stop_token stop) {while (!stop.stop_requested()) {for (int i=0;i<20 && !stop.stop_requested();++i) std::this_thread::sleep_for(250ms);if (!stop.stop_requested() && active.load()) queueScan();}});
+        worker=std::jthread([this](std::stop_token stop) {while (!stop.stop_requested()) {std::this_thread::sleep_for(33ms);if (!stop.stop_requested() && active.load()) queueScan();}});
     }
     bool forceConsumption() {
         auto* ini=RE::INISettingCollection::GetSingleton();auto* setting=ini ? ini->GetSetting("bForceNPCsUseAmmo:Combat") : nullptr;
@@ -47,17 +49,20 @@ public:
         return setting->GetBool();
     }
     void clear() {
+        actorWork.clear();trackedActors.clear();previousContext.clear();bootstrapPending=true;nextDiscovery={};
         active=false;++session;saved={};saved.seed=static_cast<std::uint64_t>(std::chrono::high_resolution_clock::now().time_since_epoch().count());validSave=true;
         resets.clear();preparing.clear();weaponDirty.clear();{std::scoped_lock lock(giftMutex);pendingGifts.clear();}queuedScan=noScan;
     }
     void enterGame() {
+        actorWork.clear();trackedActors.clear();previousContext.clear();bootstrapPending=true;nextDiscovery={};
         if (!validSave || !forceConsumption()) {logger::error("Ammo restock disabled: validSave={}",validSave);return;}
-        active=true;initialDiagnostics=0;refillDiagnostics=0;giftDiagnostics=0;capDiagnostics=0;logger::info("Ammo restock enabled; preserving {} actor records; followers use twice the normal interval",saved.actors.size());queueScan();
+        active=true;initialDiagnostics=0;refillDiagnostics=0;giftDiagnostics=0;capDiagnostics=0;logger::info("Ammo restock enabled; preserving {} actor records; followers use twice the normal interval",saved.actors.size());discoverLoadedActors();queueScan();
     }
     template<class F> void queue(F task) {
         const auto generation=session.load();if (auto* tasks=SKSE::GetTaskInterface()) tasks->AddTask([this,generation,task=std::move(task)] {if (active.load() && session.load()==generation) task();});
     }
     bool eligible(RE::Actor* actor) const {
+        if(actor&&actor->GetRace()){auto* keyword=RE::TESForm::LookupByID<RE::BGSKeyword>(Vanilla::ActorTypeDwarven);if(automatonExcluded(actor->GetRace()->GetFormID(),keyword&&(actor->GetRace()->HasKeyword(keyword)||(actor->GetActorBase()&&actor->GetActorBase()->HasKeyword(keyword)))))return false;}
         return actor && !actor->IsPlayerRef() && actor->GetActorBase() && actor->GetRace() && !actor->IsChild() && !actor->IsSummoned() && !actor->GetCommandingActor() && !actor->IsDead() && !actor->IsDeleted() && !actor->IsDisabled();
     }
     State* stateFor(RE::Actor* actor) {
@@ -89,7 +94,7 @@ public:
         c.battle=c.guard || bandit || species(actor)!=Family::General || (!hunter && includes(Vanilla::battleClasses,id));return c;
     }
     bool rangedWeapon(RE::TESObjectWEAP* weapon,Kind kind) const {
-        if (!weapon || weapon->IsDeleted() || weapon->IsBound() || weapon->weaponData.flags2.any(RE::TESObjectWEAP::Data::Flag2::kPlayerOnly)) return false;
+        if (!weapon || !rangedFormEligible(weapon->GetFormID(),weapon->GetPlayable()) || weapon->IsDeleted() || weapon->IsBound() || weapon->weaponData.flags2.any(RE::TESObjectWEAP::Data::Flag2::kPlayerOnly)) return false;
         return kind==Kind::Bolt ? weapon->IsCrossbow() : weapon->IsBow() && !weapon->IsCrossbow();
     }
     bool usableAmmo(RE::TESAmmo* ammo) const {
@@ -126,7 +131,31 @@ public:
     void flushResets() {
         flushGifts();for (auto id:resets.drain()) if (auto it=saved.actors.find(id);it!=saved.actors.end()) resetInventoryCycle(it->second);
     }
+    void recoverSphere(RE::Actor* actor) {
+        if(!validSave||!actor||actor->IsPlayerRef()||actor->IsDeleted()||actor->IsDisabled()||actor->IsDead()||!actor->Get3D()||!actor->GetRace()||!actor->GetActorBase()||!steel)return;
+        auto* base=actor->GetActorBase();const auto id=actor->GetFormID();
+        if(actor->GetRace()->GetFormID()!=0x000131F2&&(!base->npcClass||base->npcClass->GetFormID()!=0x00090358))return;
+        auto found=saved.actors.find(id);if(found==saved.actors.end()||found->second.base!=base->GetFormID()||!found->second.channels[0].initialized||resets.contains(id)||preparing.contains(id))return;
+        auto* changes=actor->GetInventoryChanges(true);if(!changes)return;
+        int delta=0;if(changes->entryList)for(auto* entry:*changes->entryList)if(entry&&entry->object==steel)delta=std::max(0,entry->countDelta);
+        auto inventory=actor->GetInventory([&](RE::TESBoundObject& item){return &item==steel;},true);
+        auto it=inventory.find(steel);int held=it==inventory.end()?0:std::max(0,it->second.first);
+        const bool quest=it!=inventory.end()&&it->second.second&&it->second.second->IsQuestObject();
+        int gifts=found->second.gifts.contains(steel->GetFormID())?found->second.gifts.at(steel->GetFormID()):0;
+        const int remove=quest?0:sphereRecoveryCount(held,delta,gifts,found->second.channels[0].cap);
+        // Retire before callbacks. Reuse the existing serialized channel marker;
+        // no save format change and no repeat cleanup after reload.
+        found->second.channels[0]={};
+        logger::info("Sphere recovery {:08X} '{}': held={}, extra delta={}, protected gifts={}, removing={} steel arrows; legacy arrow record retired",id,actor->GetName(),held,delta,gifts,remove);
+        if(!remove)return;
+        preparing.insert(id);struct Guard{std::set<std::uint32_t>& values;std::uint32_t id;~Guard(){values.erase(id);}}guard{preparing,id};
+        if(actor->GetCurrentAmmo()==steel)if(auto* equip=RE::ActorEquipManager::GetSingleton())equip->UnequipObject(actor,steel,nullptr,1,nullptr,false,true,false,true);
+        actor->RemoveItem(steel,remove,RE::ITEM_REMOVE_REASON::kRemove,nullptr,nullptr);
+        actor->EvaluatePackage();
+    }
     void visit(RE::Actor* actor) {
+        if(validSave&&actor){flushGifts();recoverSphere(actor);}
+
         if (!validSave || !eligible(actor)) return;
         const auto id=actor->GetFormID();const auto generation=session.load();
         if (preparing.contains(id) || resets.contains(id)) return;
@@ -207,23 +236,78 @@ public:
             if ((initial ? initialDiagnostics : refillDiagnostics)++<30) logger::info("{} {:08X} '{}': {}, cap={}, existing={}, added={}, ammo='{}', next game day={}, interval={} days, follower={}",initial ? "Initialized" : "Restocked",id,actor->GetName(),k ? "bolts" : "arrows",channel.cap,current,quantity,selectedAmmo ? selectedAmmo->GetName() : "none needed",channel.due,channel.interval,environment.follower);
         }
     }
+    void discoverLoadedActors() {
+        if (!bootstrapPending) return;
+        bootstrapPending=false;
+        unsigned count=0;
+        const auto start=std::chrono::steady_clock::now();
+        if (auto* processes=RE::ProcessLists::GetSingleton()) {
+            processes->ForAllActors([&](RE::Actor* actor) {
+                if (actor) {trackedActors.insert(actor->GetFormID());actorWork.add(actor->GetFormID());++count;}
+                return RE::BSContainer::ForEachResult::kContinue;
+            });
+        }
+        logger::info("Save-load discovery queued {} actor IDs in {:.3f} ms; Loading Menu open={}",count,
+            std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-start).count(),
+            RE::UI::GetSingleton()->IsMenuOpen(RE::LoadingMenu::MENU_NAME));
+    }
     void queueScan() {
         const auto generation=session.load();if (queuedScan.exchange(generation)==generation) return;
         if (auto* tasks=SKSE::GetTaskInterface()) tasks->AddTask([this,generation] {auto expected=generation;queuedScan.compare_exchange_strong(expected,noScan);if (active.load() && session.load()==generation) scan();});
     }
     void scan() {
         if (!validSave || !forceConsumption() || RE::UI::GetSingleton()->GameIsPaused()) return;
-        flushGifts();std::vector<RE::ActorHandle> actors;
-        RE::ProcessLists::GetSingleton()->ForAllActors([&](RE::Actor* actor) {if (actor) actors.push_back(actor->GetHandle());return RE::BSContainer::ForEachResult::kContinue;});
-        const auto generation=session.load();for (const auto& handle:actors) {if (!active.load() || session.load()!=generation) break;if (auto actor=handle.get()) visit(actor.get());}
+        flushGifts();
+        const auto start=std::chrono::steady_clock::now();
+        if (start>=nextDiscovery) {
+            nextDiscovery=start+5s;
+            const auto* calendar=RE::Calendar::GetSingleton();
+            const double now=calendar ? calendar->GetDaysPassed() : -1;
+            for (auto it=trackedActors.begin();it!=trackedActors.end();) {
+                const auto id=*it;
+                auto* actor=RE::TESForm::LookupByID<RE::Actor>(id);
+                if (!actor || actor->IsDeleted() || !actor->Is3DLoaded()) {
+                    previousContext.erase(id);it=trackedActors.erase(it);continue;
+                }
+                ++it;
+                if (!eligible(actor)) continue;
+                const auto environment=context(actor);
+                const unsigned flags=environment.city | (environment.guard<<1) | (environment.banditCamp<<2)
+                    | (environment.follower<<3) | (environment.battle<<4);
+                const bool changed=!previousContext.contains(id) || previousContext[id]!=flags;
+                previousContext[id]=flags;
+                const auto found=saved.actors.find(id);
+                bool due=found==saved.actors.end();
+                if (found!=saved.actors.end()) for (const auto& channel:found->second.channels)
+                    due=due || (channel.initialized && channel.due>=0 && now>=channel.due);
+                if (changed || due || weaponDirty.contains(id)) actorWork.add(id);
+            }
+        }
+        const auto generation=session.load();
+        unsigned processed=0;
+        // A worker wake schedules the next slice; queuing continuations here can
+        // cause SKSE to drain every slice in the same frame.
+        while (processed<4 && !actorWork.empty() && std::chrono::steady_clock::now()-start<2ms) {
+            if (!active.load() || session.load()!=generation) break;
+            const auto id=actorWork.pop();
+            if (RE::TESForm::LookupByID<RE::Actor>(id)) trackedActors.insert(id);
+            visit(RE::TESForm::LookupByID<RE::Actor>(id));
+            ++processed;
+        }
     }
     void requestReset(RE::Actor* actor) {
         if (!active.load() || !actor || actor->IsPlayerRef() || !resets.request(actor->GetFormID())) return;
-        const auto id=actor->GetFormID();queue([this,id] {if (!resets.take(id)) return;flushGifts();if (auto it=saved.actors.find(id);it!=saved.actors.end()) resetInventoryCycle(it->second);visit(RE::TESForm::LookupByID<RE::Actor>(id));});
+        const auto id=actor->GetFormID();queue([this,id] {if (!resets.take(id)) return;flushGifts();if (auto it=saved.actors.find(id);it!=saved.actors.end()) resetInventoryCycle(it->second);actorWork.add(id);});
     }
     RE::BSEventNotifyControl ProcessEvent(const RE::TESContainerChangedEvent* event,RE::BSTEventSource<RE::TESContainerChangedEvent>*) override {
-        if (event && active.load() && event->newContainer && event->newContainer!=0x14 && RE::TESForm::LookupByID<RE::TESObjectWEAP>(event->baseObj)) {
-            const auto id=event->newContainer;queue([this,id] {if (auto* actor=RE::TESForm::LookupByID<RE::Actor>(id)) {weaponDirty.insert(id);visit(actor);}});
+        if (event && active.load() && RE::TESForm::LookupByID<RE::TESObjectWEAP>(event->baseObj)) {
+            const auto oldID=event->oldContainer,newID=event->newContainer;
+            queue([this,oldID,newID] {
+                for (const auto id:{oldID,newID}) if (id && id!=0x14)
+                    if (RE::TESForm::LookupByID<RE::Actor>(id)) {
+                        trackedActors.insert(id);weaponDirty.insert(id);actorWork.add(id);
+                    }
+            });
         }
         if (event && active.load() && event->oldContainer==0x14 && event->newContainer && event->newContainer!=0x14 && event->itemCount>0 && RE::TESForm::LookupByID<RE::TESAmmo>(event->baseObj)) {
             {std::scoped_lock lock(giftMutex);if (pendingGifts.size()>=100000) {active=false;validSave=false;logger::error("Pending gifts overflow; restock disabled");return RE::BSEventNotifyControl::kContinue;}pendingGifts.push_back({event->newContainer,event->baseObj,event->itemCount});}
@@ -231,16 +315,23 @@ public:
         }return RE::BSEventNotifyControl::kContinue;
     }
     RE::BSEventNotifyControl ProcessEvent(const RE::TESObjectLoadedEvent* event,RE::BSTEventSource<RE::TESObjectLoadedEvent>*) override {
-        if (event && event->loaded && active.load()) {const auto id=event->formID;queue([this,id] {visit(RE::TESForm::LookupByID<RE::Actor>(id));});}return RE::BSEventNotifyControl::kContinue;
+        if (event && active.load()) {const auto id=event->formID;const bool loaded=event->loaded;queue([this,id,loaded] {
+            if (!loaded) {trackedActors.erase(id);previousContext.erase(id);return;}
+            if (RE::TESForm::LookupByID<RE::Actor>(id)) trackedActors.insert(id);actorWork.add(id);});}return RE::BSEventNotifyControl::kContinue;
     }
     RE::BSEventNotifyControl ProcessEvent(const RE::TESActorLocationChangeEvent* event,RE::BSTEventSource<RE::TESActorLocationChangeEvent>*) override {
-        if (event && event->actor && active.load()) {const auto id=event->actor->GetFormID();queue([this,id] {visit(RE::TESForm::LookupByID<RE::Actor>(id));});}return RE::BSEventNotifyControl::kContinue;
+        if (event && event->actor && active.load()) {const auto id=event->actor->GetFormID();queue([this,id] {actorWork.add(id);});}return RE::BSEventNotifyControl::kContinue;
     }
     RE::BSEventNotifyControl ProcessEvent(const RE::TESResetEvent* event,RE::BSTEventSource<RE::TESResetEvent>*) override {if (event && event->object) requestReset(event->object->As<RE::Actor>());return RE::BSEventNotifyControl::kContinue;}
     RE::BSEventNotifyControl ProcessEvent(const RE::TESFormDeleteEvent* event,RE::BSTEventSource<RE::TESFormDeleteEvent>*) override {
         if (event && active.load()) {const auto id=event->formID;queue([this,id] {auto* form=RE::TESForm::LookupByID(id);if (!form || form->IsDeleted()) saved.actors.erase(id);});}return RE::BSEventNotifyControl::kContinue;
     }
 private:
+    NL::ActorWorkQueue actorWork;
+    std::set<std::uint32_t> trackedActors;
+    std::unordered_map<std::uint32_t,unsigned> previousContext;
+    bool bootstrapPending=true;
+    std::chrono::steady_clock::time_point nextDiscovery{};
     std::array<RE::TESFaction*,2> hunters{};RE::TESFaction *banditFaction=nullptr,*forswornFaction=nullptr,*followerFaction=nullptr;
     RE::BGSKeyword *cityKeyword=nullptr,*campKeyword=nullptr;RE::TESAmmo *iron=nullptr,*steel=nullptr,*falmer=nullptr,*ancient=nullptr,*forsworn=nullptr,*steelBolt=nullptr,*dwarvenBolt=nullptr;
     ResetInbox resets;std::set<std::uint32_t> preparing,weaponDirty;std::mutex giftMutex;std::vector<GiftEvent> pendingGifts;
@@ -282,8 +373,8 @@ void message(SKSE::MessagingInterface::Message* message) {
 }
 }
 SKSEPluginLoad(const SKSE::LoadInterface* skse) {
-    SKSE::Init(skse);if (const auto path=SKSE::log::log_directory()) {auto sink=std::make_shared<spdlog::sinks::basic_file_sink_mt>((*path/"NPCsHaveAmmo.log").string(),true);spdlog::set_default_logger(std::make_shared<spdlog::logger>("NPCsHaveAmmo",std::move(sink)));spdlog::set_level(spdlog::level::info);spdlog::flush_on(spdlog::level::info);}
-    logger::info("NPCs Have Ammo 1.0.3; runtime {}",REL::Module::get().version().string());
+    SKSE::Init(skse);if (const auto path=SKSE::log::log_directory()) {auto sink=std::make_shared<spdlog::sinks::basic_file_sink_mt>((*path/"NPCsHaveAmmo.log").string(),true);spdlog::set_default_logger(std::make_shared<spdlog::logger>("NPCsHaveAmmo",std::move(sink)));spdlog::set_level(spdlog::level::info);spdlog::flush_on(spdlog::level::warn);}
+    logger::info("NPCs Have Ammo 1.0.8; runtime {}",REL::Module::get().version().string());
     const auto v=REL::Module::get().version();const std::set<unsigned> ae{317,318,323,342,353,629,640,659,1130,1170,1179};
     if (!(v.major()==1 && ((v.minor()==5 && v.patch()==97) || (v.minor()==6 && ae.contains(v.patch())) || (v.minor()==7 && (v.patch()==99 || v.patch()==104))))) {logger::error("Unsupported runtime");return false;}
     auto* api=SKSE::GetSerializationInterface();if (!api || !SKSE::GetTaskInterface()) return false;

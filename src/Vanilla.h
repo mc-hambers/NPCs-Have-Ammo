@@ -2,6 +2,9 @@
 #include <array>
 #include <cstdint>
 namespace NHA::Vanilla {
+inline constexpr std::uint32_t ActorTypeDwarven=0x0001397A;
+inline constexpr std::array<std::uint32_t,3> automatonRaces{{0x000131F1,0x000131F2,0x000131F3}};
+inline constexpr std::array<std::uint32_t,2> creatureRangedWeapons{{0x0007F6DF,0x0010EC8A}};
 inline constexpr std::uint32_t HunterFaction=0x0004E509;
 inline constexpr std::uint32_t WEServicesHunterFaction=0x000AC9C2;
 inline constexpr std::uint32_t BanditFaction=0x0001BCC0;

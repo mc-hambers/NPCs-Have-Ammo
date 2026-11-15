@@ -38,3 +38,7 @@ Automated regressions cover civilian-to-follower combat caps, restoration of the
 Core tests cover equipped stock, larger unprotected stacks, priority over cheaper native lists, carried species variants, invalid ammo, and arrow/bolt separation. Save schema and encoding are unchanged.
 
 Unrun Skyrim checks: remove all bows/crossbows from hunter and archer-class NPCs and confirm no restocks; restore a compatible weapon and verify saved caps/timers resume without rerolls. Test bow-only/crossbow-only/both-weapon inventories and weapon removal during callback-driven changes. Confirm equipped or larger unprotected current stacks beat lists/fallbacks, and gifts remain protected.
+
+1.0.4: Added automaton race/keyword, creature weapon and Falmer/Draugr eligibility regression checks. In-game Sphere movement and reloading cells remain untested.
+
+1.0.6: Legacy recovery tests cover old-cap bounds, gift/base protection and zero/negative inventory deltas. Live unequipping, Sphere movement and one-shot persistence across a real save/reload remain untested.

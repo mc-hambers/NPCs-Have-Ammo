@@ -1,8 +1,11 @@
 {
-  "version": "1.0.3",
+  "version": "1.0.8",
   "source_archive": "NPCs-Have-Ammo-source.zip",
-  "source_sha256": "0d0eedd53c5728d9993be3dd1ba25937a3dc1cf7a8132856f92d0341f078e742",
+  "source_sha256": "242630efe04cf85cea71b6c197d6545005d6f13eaf07993f2d07ea6688822a9a",
   "precompiled_commonlib": "build/vendor/CommonLibSSE-NG/CommonLibSSE.lib",
   "precompiled_download": "CommonLibSSE.lib.xz",
-  "precompiled_sha256": "f6a1966ec070d2a759efce43ddeb242d5fa1e50f5160c9e935cd2fe1dea9e3bb"
+  "precompiled_sha256": "f6a1966ec070d2a759efce43ddeb242d5fa1e50f5160c9e935cd2fe1dea9e3bb",
+  "runtime_archive": "NPCs-Have-Ammo-v1.0.8.zip",
+  "runtime_sha256": "d2f9df59c3d408f92bf91f1232dd858f867599e4a7c9f2e5063c638e214bb70f",
+  "gameplay_tested": false
 }

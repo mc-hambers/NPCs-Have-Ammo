@@ -53,10 +53,10 @@ def main():
     library=ctypes.WinDLL(str(args.dll.resolve()))
     for name in ['SKSEPlugin_Load','SKSEPlugin_Query']: getattr(library,name)
     exported=(ctypes.c_uint32*2).in_dll(library,'SKSEPlugin_Version')
-    if exported[1] != 0x01000030: raise ValueError('Unexpected version metadata')
+    if exported[1] != 0x01000050: raise ValueError('Unexpected version metadata')
     plugin_name=ctypes.string_at(ctypes.addressof(exported)+8,256).split(b'\0',1)[0].decode()
     if plugin_name != 'NPCs Have Ammo (arrow/bolt restock mod)': raise ValueError('Unexpected plugin name')
-    report={'plugin_name':plugin_name,'dll_architecture':'x64','windows_loader':'passed','skse_exports':'passed','version':'1.0.3','gameplay_tested':False}
+    report={'plugin_name':plugin_name,'dll_architecture':'x64','windows_loader':'passed','skse_exports':'passed','version':'1.0.5','gameplay_tested':False}
     if args.game:
         version,lookup=address_library(args.game/'Data/SKSE/Plugins/versionlib-1-7-104-0.bin')
         game=PE(args.game/'SkyrimSE.exe')

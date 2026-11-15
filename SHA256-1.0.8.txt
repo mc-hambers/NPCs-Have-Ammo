@@ -1,0 +1,2 @@
+d2f9df59c3d408f92bf91f1232dd858f867599e4a7c9f2e5063c638e214bb70f  NPCs-Have-Ammo-v1.0.8.zip
+242630efe04cf85cea71b6c197d6545005d6f13eaf07993f2d07ea6688822a9a  NPCs-Have-Ammo-v1.0.8-source.zip

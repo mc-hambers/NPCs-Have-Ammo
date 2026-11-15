@@ -1,3 +1,5 @@
+#include "ActorWorkQueue.h"
+#include "Eligibility.h"
 #include "Core.h"
 #include "Lifecycle.h"
 #include "Serialization.h"
@@ -12,6 +14,32 @@ int checks=0;
 void check(bool value,const char* message) {++checks;if (!value) throw std::runtime_error(message);}
 bool near(double a,double b) {return std::abs(a-b)<0.000001;}
 void tests() {
+    NL::ActorWorkQueue work;
+    work.add(0);work.add(10);work.add(10);work.add(20);
+    check(work.pop()==10,"Actor queue deduplicates repeated events");
+    check(work.pop()==20 && work.empty(),"Actor queue preserves FIFO order");
+    work.add(30);work.clear();
+    check(work.empty() && work.pop()==0,"Actor queue clears on reload");
+    work.add(10);
+    check(work.pop()==10,"Actor queue can accept an actor again after processing");
+
+    check(sphereRecoveryCount(50,50,0,50)==50,"Recover only legacy surplus");
+    check(sphereRecoveryCount(65,55,15,50)==40,"Preserve base ten and all fifteen gifted arrows");
+    check(sphereRecoveryCount(100,100,0,50)==50,"Bound recovery to old cap");
+    check(sphereRecoveryCount(20,20,25,50)==0,"Gift-only inventory untouched");
+    check(sphereRecoveryCount(20,0,0,50)==0,"Original inventory untouched");
+    check(sphereRecoveryCount(20,20,0,0)==0,"No old cap means no cleanup");
+    check(sphereRecoveryCount(0,50,0,50)==0,"Absent arrows untouched");
+    for(int held=0;held<=100;held+=5)for(int delta=-10;delta<=110;delta+=10)for(int gifts=0;gifts<=110;gifts+=10){int n=sphereRecoveryCount(held,delta,gifts,50);check(n>=0&&n<=50&&n<=held&&n<=std::max(0,std::min(held,std::max(0,delta))-gifts),"Recovery never exceeds surplus minus gifts");}
+
+    for(auto race:Vanilla::automatonRaces)check(automatonExcluded(race,false),"Vanilla automaton excluded without keyword");
+    check(automatonExcluded(0xFF123456,true),"Mod automaton keyword excluded");
+    for(auto race:Vanilla::falmerRaces)check(!automatonExcluded(race,false),"Falmer remains eligible");
+    for(auto race:Vanilla::undeadRaces)check(!automatonExcluded(race,false),"Draugr and undead remain eligible");
+    for(auto weapon:Vanilla::creatureRangedWeapons)check(!rangedFormEligible(weapon,true),"Sphere weapon excluded even if another mod marks playable");
+    check(!rangedFormEligible(0xFF123456,false),"Non-playable creature weapon excluded");
+    for(auto weapon:{0x00038340u,0x00083167u,0x000302CAu,0x0005D179u})check(rangedFormEligible(weapon,true),"Falmer and Draugr bows supported");
+
     Context city;city.city=true;Context guardCity=city;guardCity.guard=true;guardCity.battle=true;
     Context guard;guard.guard=true;guard.battle=true;Context wilderness;
     Context camp;camp.banditCamp=true;camp.battle=true;

@@ -10,7 +10,7 @@ from pathlib import Path
 root=Path(__file__).resolve().parents[1]
 dependency=root
 if not (dependency/'vcpkg_installed').exists(): dependency=root.parent/'Pickpocketing-Loot' 
-version='1.0.3'
+version='1.0.8'
 release=root/'releases'
 release.mkdir(exist_ok=True)
 dll=root/'build/package/SKSE/Plugins/NPCsHaveAmmo.dll'
